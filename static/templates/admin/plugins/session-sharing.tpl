@@ -105,6 +105,20 @@
 						</p>
 					</div>
 					<div class="form-group">
+						<label for="payload:roles">Roles</label>
+						<input type="text" id="payload:roles" name="payload:roles" title="Roles" class="form-control" placeholder="roles">
+						<p class="help-block">
+							All available user roles.
+						</p>
+					</div>
+					<div class="form-group">
+						<label for="payload:role">Admin Role</label>
+						<input type="text" id="payload:adminRole" name="payload:adminRole" title="Admin Role" class="form-control" placeholder="adminRole">
+						<p class="help-block">
+							Supercedes admin role name.
+						</p>
+					</div>
+					<div class="form-group">
 						<label for="payload:firstName">First Name</label>
 						<input type="text" id="payload:firstName" name="payload:firstName" title="First Name" class="form-control" placeholder="firstName">
 					</div>

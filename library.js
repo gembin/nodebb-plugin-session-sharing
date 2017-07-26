@@ -36,7 +36,7 @@ var plugin = {
 		'payload:firstName': 'firstName',
 		'payload:lastName': 'lastName',
 		'payload:picture': 'picture',
-		'payload:role': 'role',
+		'payload:role': 'claim.role',
 		'payload:adminRole': 'admin',
 		'payload:parent': undefined
 	}
@@ -62,7 +62,6 @@ plugin.appendConfig = function (config, callback) {
 	config.sessionSharing = {
 		logoutRedirect: plugin.settings.logoutRedirect,
 		loginOverride: plugin.settings.loginOverride
-		//loginOverride: false
 	};
 
 	callback(null, config);
@@ -132,13 +131,13 @@ plugin.base64toPem = function (base64) {
 plugin.process = function (token, callback) {
 	// token format:
 	// "jwt-token-xxxxx;Version=1;Domain=xxx.com;Path=/;Max-Age=86400;HttpOnly"
-	// winston.info('payload token:', token)
+	winston.info('Enter process, payload token:', token)
 	var jwtToken = token.toString().split(";")[0];
-	token = jwtToken.substring(1);
-	// winston.info('token: ', token)
+	token = jwtToken;
+	winston.info('extracted token: ', token)
 	var decoded = jwt.verify(token, plugin.base64toPem(plugin.settings.secret));
-	//var decoded = jwt.decode(t, {complete: true});
-	winston.info('[session-sharing] decoded token: ', decoded);
+	//var decoded = jwt.decode(token, {complete: true});
+        winston.info('[session-sharing] decoded token: ', decoded);
 
 	async.waterfall([
 		async.apply(jwt.verify, token, plugin.base64toPem(plugin.settings.secret)),
@@ -155,15 +154,23 @@ plugin.extractUserProfile = function (payload) {
 		email = parent ? payload[parent][plugin.settings['payload:email']] : payload[plugin.settings['payload:email']],
 		username = parent ? payload[parent][plugin.settings['payload:username']] : payload[plugin.settings['payload:username']],
 		firstName = parent ? payload[parent][plugin.settings['payload:firstName']] : payload[plugin.settings['payload:firstName']],
-		lastName = parent ? payload[parent][plugin.settings['payload:lastName']] : payload[plugin.settings['payload:lastName']],
-		picture = parent ? payload[parent][plugin.settings['payload:picture']] : payload[plugin.settings['payload:picture']],
+	        lastName = parent ? payload[parent][plugin.settings['payload:lastName']] : payload[plugin.settings['payload:lastName']],
+	        picture = parent ? payload[parent][plugin.settings['payload:picture']] : payload[plugin.settings['payload:picture']],
 		nickName = parent ? payload[parent][plugin.settings['payload:nickName']] : payload[plugin.settings['payload:nickName']],
-		roles = parent ? payload[parent][plugin.settings['payload:roles']] : payload[plugin.settings['payload:roles']];
-
+		roles = parent ? payload[parent][plugin.settings['payload:roles']] : payload[plugin.settings['payload:roles']],
+                adminRole = parent ? payload[parent][plugin.settings['payload:adminRole']] : payload[plugin.settings['payload:adminRole']];
+            
+        //var username= payload['username'];
+        //var email= payload['email'];
+        //var nickName= payload['nickName'];
+        //var picture= payload['picture'];
 	// var fullname = [firstName, lastName].join(' ').trim();
+        //id=payload['id'];
+        // roles= payload['claim.roles'];
+
 	var fullname = nickName;
 	if (!username) {
-		username = nickName;
+	  username = nickName;
 	}
 
 	var profile = {};
@@ -172,28 +179,31 @@ plugin.extractUserProfile = function (payload) {
 	profile.email = email;
 	profile.fullname = fullname;
 	profile.picture = picture;
-	profile.roles = roles || [];  //it's []
+	profile.roles = roles || []; 
+        profile.adminRole = adminRole || 'admin';
+        winston.info('[session-sharing] extracted profile: ', profile);
 	return profile;
 }
 
 plugin.verifyToken = function (payload, callback) {
 	var profile = plugin.extractUserProfile(payload);
-	winston.info('[session-sharing] user profile: ', profile);
 	if (!profile.id || !profile.username) {
 		return callback(new Error('payload-invalid'));
 	}
-	callback(null, profile);
+        callback(null, profile);
 };
 
 
 plugin.findUser = function (profile, callback) {
 	// If payload id resolves to a user, return the uid, otherwise register a new user
-	winston.verbose('[session-sharing] Payload verified');
+	winston.info('[session-sharing] Payload verified');
 
 	user.getUidByUsername(profile.username, function (err, uid) {
-		winston.verbose('err:', err, 'uid: ', uid)
+		winston.info('err:', err, 'uid: ', uid)
 		if (err) { return callback(err); }
 		if (uid) {
+                        console.log('try update profile:',profile)
+                        plugin.tryJoiningGroup(uid,profile);
 			if (plugin.settings.updateProfile === 'on') {
 				plugin.updateUserProfile(uid, profile, callback);
 			}
@@ -206,10 +216,29 @@ plugin.findUser = function (profile, callback) {
 
 plugin.verifyUser = function (uid, callback) {
 	// Check ban state of user, reject if banned
+        winston.info('[session-sharing] Verify user uid:', uid);
 	user.isBanned(uid, function (err, banned) {
 		callback(err || banned ? new Error('banned') : null, uid);
 	});
 };
+
+
+plugin.tryJoiningGroup = function (uid, profile){
+	var roles = profile.roles.map(function (value) {
+	      return value.toUpperCase();
+	});
+        var adminRole=String(profile.adminRole).trim().toUpperCase();
+        winston.info('[session-sharing] User roles:', roles);
+        winston.info('[session-sharing] Admin require role:', adminRole);
+	var pos = roles.indexOf(adminRole);
+	if (pos != -1) {
+	   groups.join('administrators', uid, function (r) {
+	       winston.info('[session-sharing] join admin group:', uid, ', result:', r);
+	   });
+	} else {
+	   winston.info('[session-sharing] normal user:', profile.username);
+	}
+}
 
 plugin.updateUserProfile = function (uid, profile, callback) {
 	async.waterfall([
@@ -258,7 +287,7 @@ plugin.updateUserProfile = function (uid, profile, callback) {
 
 plugin.createUser = function (profile, callback) {
 	if (plugin.settings.noRegistration === 'on') {
-		return callback(new Error('no-match'));
+           return callback(new Error('no-match'));
 	}
 
 	winston.info('[session-sharing] No user found, creating a new user for this login: ', profile);
@@ -276,6 +305,7 @@ plugin.createUser = function (profile, callback) {
 			return value.toUpperCase();
 		});
 		winston.info('[session-sharing] user roles:', roles);
+                 winston.info('[session-sharing] admin role name:', plugin.settings['payload:roleAdmin']);
 		var pos = roles.indexOf(String(plugin.settings['payload:roleAdmin']).trim().toUpperCase());
 		if (pos != -1) {
 			groups.join('administrators', uid, function (r) {
@@ -285,13 +315,14 @@ plugin.createUser = function (profile, callback) {
 			winston.info('[session-sharing] normal user:', profile.username);
 		}
 
-		callback(err, uid);
+		//callback(err, uid);
 	});
 };
 
 plugin.addMiddleware = function (req, res, next) {
-	function handleGuest(req, res, next) {
-		if (plugin.settings.guestRedirect && !req.originalUrl.startsWith(nconf.get('relative_path') + '/login?local=1')) {
+        winston.info('enter session sharing plugin');
+        function handleGuest(req, res, next) {
+        	if (plugin.settings.guestRedirect && !req.originalUrl.startsWith(nconf.get('relative_path') + '/login?local=1')) {
 			// If a guest redirect is specified, follow it
 			res.redirect(plugin.settings.guestRedirect.replace('%1', encodeURIComponent(nconf.get('url') + req.originalUrl)));
 		} else if (res.locals.fullRefresh === true) {
@@ -326,7 +357,8 @@ plugin.addMiddleware = function (req, res, next) {
 			plugin.cleanup({ res: res });
 			return handleGuest.apply(null, arguments);
 		}
-
+                winston.info('req.cookies:');
+		winston.info(req.cookies);
 		if (Object.keys(req.cookies).length && req.cookies.hasOwnProperty(plugin.settings.cookieName) && req.cookies[plugin.settings.cookieName].length) {
 			return plugin.process(req.cookies[plugin.settings.cookieName], function (err, uid) {
 				if (err) {
